@@ -1,0 +1,54 @@
+=pod
+
+=head1 SYNOPSIS
+
+This plugin checks the badmailto_patterns config. This allows
+special patterns to be denied (e.g. percent hack, bangs,
+double ats).
+
+=head1 CONFIG
+
+config/badmailto_patterns
+
+Patterns are stored in the format pattern\sresponse, where pattern
+is a Perl pattern expression. Don't forget to anchor the pattern if
+you want to restrict it from matching anywhere in the string.
+
+=head1 AUTHOR
+
+Copyright 2009 Johan Almqvist <johan-qpsmtpd@almqvist.net>
+
+This software is free software and may be distributed under the same
+terms as qpsmtpd itself.
+
+=cut
+
+sub hook_mail {
+  my ($self, $transaction, $sender, %param) = @_;
+
+  my @badmailfrom = $self->qp->config("badmailfrom_patterns")
+    or return (DECLINED);
+
+  return (DECLINED) if ($sender->format eq "<>");
+
+  my $host = lc $sender->host;
+  my $from = lc($sender->user) . '@' . $host;
+
+  for (@badmailfrom) {
+    my ($pattern, $response) = split /\s+/, $_, 2;
+    $response = "Your envelope sender is in my badmailfrom list" unless $response;
+    $transaction->notes('badmailfrom_patterns', $response) if ($from =~ /$pattern/);
+  }
+  return (DECLINED);
+}
+
+sub hook_rcpt
+{
+  my ($self, $transaction, $rcpt, %param) = @_;
+  my $note = $transaction->notes('badmailfrom_patterns');
+  if ($note) {
+    $self->log(LOGINFO, $note);
+    return (DENY, $note);
+  }
+  return (DECLINED);
+}
