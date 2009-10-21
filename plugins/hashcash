@@ -1,0 +1,17 @@
+sub hook_data_post {
+  my ($self, $transaction) = @_;
+
+my @hashcash_rcpt = map { $_->address } $transaction->recipients;
+
+if (($#hashcash_rcpt == 0)  && ($self->connection->notes('authuser')))
+{
+        my $hashcash_header =
+                `/usr/local/bin/hashcash -Xmb26 $hashcash_rcpt[0]`;
+        $self->log(LOGNOTICE, "generated hashcash: $hashcash_header");
+        $transaction->header->add(undef, $hashcash_header);
+}
+else {
+        $self->log(LOGNOTICE, "not generating hashcash for: ".$#hashcash_rcpt);
+}
+	return DECLINED;
+}

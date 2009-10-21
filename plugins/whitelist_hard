@@ -1,0 +1,160 @@
+# $Id$
+
+=head1 NAME
+
+whitelist - Whitelist override for other qpsmtpd plugins
+
+=head1 DESCRIPTION
+
+The whitelist plugin allows portions of the SMTP conversation
+to override other plugins which might otherwise reject mail
+from a known-good sender, or where spam detection is less
+important than other factors.
+
+=head1 CONFIGURATION
+
+To enable the plugin, add it to the ~qpsmtpd/config/plugins file as usual.
+It should precede any plugins whose rejections you wish to override.
+
+Several configuration files are supported, corresponding to different
+parts of the SMTP conversation:
+
+=over 4
+
+=item whitelisthosts
+
+Any IP address (or start-anchored fragment thereof) listed in the
+whitelisthosts file will be exempted from any further validation.
+
+In addition, if the environment variable $WHITELISTCLIENT is set,
+the same rule will apply (this can be done by tcpserver.)
+
+=item whitelisthelo
+
+Any host that issues a HELO matching an entry in whitelisthelo will
+be matched.  Note that this does not actually amount to an authentication
+in any meaningful sense.
+
+=item whitelistsenders
+
+If the envelope sender of a mail (that which is sent as the MAIL FROM)
+matches an entry in whitelistsenders, or if the hostname component matches,
+the mail will be accepted.
+
+=item whitelistrcpt
+
+If any recipient of a mail (that sent as the RCPT TO) matches an
+entry from whitelistrcpt, the mail will be accepted.  Hostname matches
+apply as with whitelistsenders.
+
+=head1 BUGS
+
+Whitelist lookups are all O(n) linear scans of configuration files, even
+though they're all associative lookups.  Something should be done about
+this when CDB/DB/GDBM configs are supported.
+
+=head1 AUTHOR
+
+Written by Devin Carraway <qpsmtpd@devin.com>.
+
+=cut
+
+
+sub register {
+  my ($self, $qp) = @_;
+
+  $self->register_hook("connect", "connect_handler");
+  $self->register_hook("helo", "helo_handler");
+  $self->register_hook("ehlo", "helo_handler");
+  $self->register_hook("mail", "mail_handler");
+  $self->register_hook("rcpt", "rcpt_handler");
+  $self->register_hook("data_post", "data_handler");
+}
+
+sub connect_handler {
+	my ($self, $transaction) = @_;
+
+	# from tcpserver
+	if (exists $ENV{WHITELISTCLIENT}) {
+		$self->qp->connection->notes('whitelist', 1);
+		return OK;
+	}
+
+	my $ip = $self->qp->connection->remote_ip || return DECLINED;
+	for my $h ($self->qp->config('whitelisthosts')) {
+		if ($h eq $ip or $ip =~ /^\Q$h\E/) {
+			$self->qp->connection->notes('whitelist', 1);
+			$self->log(2,"Host $ip is a whitelisted host");
+			return OK;
+		}
+	}
+	DECLINED;
+}
+
+sub helo_handler {
+	my ($self, $transaction, $helo) = @_;
+
+	return OK if $self->qp->connection->notes('whitelist');
+	for my $h ($self->qp->config('whitelisthelo')) {
+		if ($helo and lc $h eq lc $helo) {
+			$self->qp->connection->notes('whitelist', 1);
+			$self->log(2,"HELO host $helo in whitelisthelo");
+			return OK;
+		}
+	}
+	DECLINED;
+}
+
+sub mail_handler {
+	my ($self, $transaction, $sender) = @_;
+
+	# transactions inherit the whitelistedness of the connection, if any 
+	if ($self->qp->connection->notes('whitelist')) {
+		$transaction->notes('whitelist', 1);
+		return OK;
+	}
+
+	return DECLINED if $sender->format eq '<>';
+	my $addr = lc $sender->address or return DECLINED;
+	my $host = lc $sender->host or return DECLINED;
+
+	for my $h ($self->qp->config('whitelistsenders')) {
+		next unless $h;
+		$h = lc $h;
+
+		if ($addr eq $h or $host eq $h) {
+			$transaction->notes('whitelist', 1);
+			$self->log(2,"Envelope sender $addr in whitelistsenders");
+			return OK;
+		}
+	}
+	DECLINED;
+}
+
+sub rcpt_handler {
+	my ($self, $transaction, $rcpt) = @_;
+
+	return OK if $transaction->notes('whitelist');
+
+	my $addr = lc $rcpt->address or return DECLINED;
+	my $host = lc $rcpt->host or return DECLINED;
+	my $user = lc $rcpt->user or return DECLINED;
+
+	for my $h ($self->qp->config('whitelistrcpt')) {
+		next unless $h;
+		$h = lc $h;
+
+		if ($addr eq $h or $host eq $h or (($user.'@') eq $h)) {
+			$transaction->notes('whitelist', 1);
+			$self->log(2,"Recipient $addr in whitelistrcpt");
+			return OK;
+		}
+	}
+	DECLINED;
+}
+
+sub data_handler {
+	my ($self, $transaction) = @_;
+
+	$transaction->notes('whitelist') ? OK : DECLINED;
+}

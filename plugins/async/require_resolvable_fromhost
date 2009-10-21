@@ -27,7 +27,7 @@ sub hook_mail_start {
     my ( $self, $transaction, $sender ) = @_;
     
     return DECLINED
-      if ( $self->qp->connection->notes('whitelisthost') );
+      if ( $self->qp->connection->notes('whitelistclient') );
 
     if ( $sender ne "<>" ) {
         
@@ -37,14 +37,8 @@ sub hook_mail_start {
             return Qpsmtpd::DSN->addr_bad_from_system( DENYSOFT,
                 "FQDN required in the envelope sender" );
         }
-
-        return DECLINED if $sender->host =~ m/^\[(\d{1,3}\.){3}\d{1,3}\]$/;
-
-        unless ($self->check_dns( $sender->host )) {
-            return Qpsmtpd::DSN->temp_resolver_failed(
-                "Could not resolve " . $sender->host );
-        }
-
+        
+        $self->check_dns( $sender->host );
         return YIELD;
     }
     
@@ -55,9 +49,9 @@ sub hook_mail_done {
     my ( $self, $transaction, $sender ) = @_;
     
     return DECLINED
-      if ( $self->qp->connection->notes('whitelisthost') );
+      if ( $self->qp->connection->notes('whitelistclient') );
 
-    if ( $sender ne "<>" && !$transaction->notes('resolvable_fromhost') ) {
+    if (!$transaction->notes('resolvable_fromhost')) {
         # default of temp_resolver_failed is DENYSOFT
         return Qpsmtpd::DSN->temp_resolver_failed(
             "Could not resolve " . $sender->host );
@@ -69,93 +63,62 @@ sub check_dns {
     my ( $self, $host ) = @_;
     my @host_answers;
 
+    return if $host =~ m/^\[(\d{1,3}\.){3}\d{1,3}\]$/;
+
     my $qp = $self->qp;
-    $qp->input_sock->pause_read;
     
     my $a_records = [];
-    my $num_queries = 1;    # queries in progress
-    my $mx_found = 0;
-
+    my $num_queries = $has_ipv6 ? 2 : 1;
     ParaDNS->new(
         callback  => sub {
             my $mx = shift;
             return if $mx =~ /^[A-Z]+$/; # error
-
             my $addr = $mx->[0];
-            $mx_found = 1;
-
             $num_queries++;
             ParaDNS->new(
                 callback => sub { push @$a_records, $_[0] if $_[0] !~ /^[A-Z]+$/; },
-                finished => sub { $num_queries--; $self->finish_up($qp, $a_records, $num_queries) },
+                finished => sub { $num_queries--; $self->finish_up($qp, $a_records) unless $num_queries; },
                 host     => $addr,
                 type     => 'A',
             );
-
             if ($has_ipv6) {
                 $num_queries++;
                 ParaDNS->new(
                     callback => sub { push @$a_records, $_[0] if $_[0] !~ /^[A-Z]+$/; },
-                    finished => sub { $num_queries--; $self->finish_up($qp, $a_records, $num_queries) },
+                    finished => sub { $num_queries--; $self->finish_up($qp, $a_records) unless $num_queries; },
                     host     => $addr,
                     type     => 'AAAA',
                 );
             }
         },
-        finished  => sub {
-
-            unless ($mx_found) {
-
-                $num_queries++;
-                ParaDNS->new(
-                    callback  => sub { push @$a_records, $_[0] if $_[0] !~ /^[A-Z]+$/; },
-                    finished  => sub { $num_queries--; $self->finish_up($qp, $a_records, $num_queries) },
-                    host      => $host,
-                    type      => 'A',
-                );
-
-                if ($has_ipv6) {
-                    $num_queries++;
-                    ParaDNS->new(
-                        callback  => sub { push @$a_records, $_[0] if $_[0] !~ /^[A-Z]+$/; },
-                        finished  => sub { $num_queries--; $self->finish_up($qp, $a_records, $num_queries) },
-                        host      => $host,
-                        type      => 'AAAA',
-                   );
-                }
-
-            }
-
-            $num_queries--;
-            $self->finish_up($qp, $a_records, $num_queries);
-        },
         host      => $host,
         type      => 'MX',
-    ) or $qp->input_sock->continue_read, return;
-
-    return 1;
+    );
+    ParaDNS->new(
+        callback  => sub { push @$a_records, $_[0] if $_[0] !~ /^[A-Z]+$/; },
+        finished  => sub { $num_queries--; $self->finish_up($qp, $a_records) unless $num_queries },
+        host      => $host,
+        type      => 'A',
+    );
+    ParaDNS->new(
+        callback  => sub { push @$a_records, $_[0] if $_[0] !~ /^[A-Z]+$/; },
+        finished  => sub { $num_queries--; $self->finish_up($qp, $a_records) unless $num_queries },
+        host      => $host,
+        type      => 'AAAA',
+    ) if $has_ipv6;
 }
 
 sub finish_up {
-    my ($self, $qp, $a_records, $num_queries) = @_;
-
-    return if defined $qp->transaction->notes('resolvable_fromhost');
-
+    my ($self, $qp, $a_records) = @_;
+    
     foreach my $addr (@$a_records) {
         if (is_valid($addr)) {
             $qp->transaction->notes('resolvable_fromhost', 1);
-            $qp->input_sock->continue_read;
-            $qp->run_continuation;
-            return;
+            last;
         }
     }
     
-    unless ($num_queries) {
-        # all queries returned no valid response
-        $qp->transaction->notes('resolvable_fromhost', 0);
-        $qp->input_sock->continue_read;
-        $qp->run_continuation;
-    }
+    $qp->run_continuation;
 }
 
 sub is_valid {

@@ -4,7 +4,7 @@
 
 clamav -- ClamAV antivirus plugin for qpsmtpd
 
-$Id$
+$Id: clamav 696 2006-12-18 10:45:22Z ask $
 
 =head1 DESCRIPTION
 
@@ -139,9 +139,6 @@ sub register {
     elsif (/back_compat/) {
 	$self->{_back_compat} = '-i --max-recursion=50';
     }
-    elsif (/declined_on_fail/) {
-       $self->{_declined_on_fail} = 1;
-    }
     else {
         $self->log(LOGERROR, "Unrecognized argument '$_' to clamav plugin");
         return undef;
@@ -152,7 +149,6 @@ sub register {
   $self->{_spool_dir} ||= $self->spool_dir();
   $self->{_back_compat} ||= ''; # make sure something is set
   $self->{_clamd_conf} ||= '/etc/clamd/conf'; # make sure something is set
-  $self->{_declined_on_fail} ||= 0; # decline the message on clamav failure
 
   unless ($self->{_spool_dir}) {
         $self->log(LOGERROR, "No spool dir configuration found");
@@ -191,7 +187,7 @@ sub hook_data_post {
     . " --stdout "
     . $self->{_back_compat}
     . " --config-file=" . $self->{_clamd_conf}
-    . " --no-summary $filename 2>&1";
+    . " --disable-summary $filename 2>&1";
   $self->log(LOGDEBUG, "Running: $cmd");
   my $output = `$cmd`;
  
@@ -206,7 +202,6 @@ sub hook_data_post {
  
   if ($signal) {
     $self->log(LOGINFO, "clamscan exited with signal: $signal");
-    return (DENYSOFT) if (!$self->{_declined_on_fail});
     return (DECLINED);
   }
   if ($result == 1) {
@@ -220,11 +215,6 @@ sub hook_data_post {
   }
   elsif ($result) {
     $self->log(LOGERROR, "ClamAV error: $cmd: $result\n");
-    return (DENYSOFT) if (!$self->{_declined_on_fail});
-  }
-  else {
-    $transaction->header->add( 'X-Virus-Checked',
-        "Checked by ClamAV on " . $self->qp->config("me") );
   }
   return (DECLINED);
 } 

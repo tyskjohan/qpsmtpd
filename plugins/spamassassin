@@ -1,5 +1,3 @@
-#!perl -w
-
 =head1 NAME
 
 spamassassin - SpamAssassin integration for qpsmtpd
@@ -28,20 +26,19 @@ the options.  Confused yet?  :-)
 
 =item reject_threshold [threshold]
 
-Set the threshold where the plugin will reject the mail.  Some
+Set the threshold over which the plugin will reject the mail.  Some
 mail servers are so useless that they ignore 55x responses not coming
 after RCPT TO, so they might just keep retrying and retrying and
 retrying until the mail expires from their queue. 
 
-Depending on your spamassassin configuration a reasonable setting is
-typically somewhere between 12 to 20.
+I like to configure this with 15 or 20 as the threshold.  
 
 The default is to never reject mail based on the SpamAssassin score.
 
 =item munge_subject_threshold [threshold]
 
-Set the threshold where the plugin will prefix the subject with
-'***SPAM***'.  A modified subject is easier to filter on than the
+Set the threshold over which we will prefix the subject with
+'***SPAM***'.  A messed up subject is easier to filter on than the
 other headers for many people with not so clever mail clients.  You
 might want to make another plugin that does this on a per user basis.
 
@@ -61,10 +58,6 @@ added X-Spam-Status, X-Spam-Flag and X-Spam-Check-By lines. Normally you can
 not trust such headers and should either rename them to X-Old-... (default,
 parameter 'rename') or have them removed (parameter 'drop'). If you know
 what you are doing, you can also leave them intact (parameter 'keep').
-
-=item spamd_user [username]
-
-The username to pass to spamd, if different from the user qpsmtpd runs as.
 
 =back
 
@@ -105,6 +98,8 @@ sub hook_data_post { # check_spam
   $self->log(LOGDEBUG, "check_spam");
   return (DECLINED) if $transaction->data_size > 500_000;
 
+  my $leave_old_headers = lc($self->{_args}->{leave_old_headers}) || 'rename';
+
   my $remote  = 'localhost';
   my $port    = 783;
   if (defined $self->{_args}->{spamd_socket}
@@ -140,7 +135,7 @@ sub hook_data_post { # check_spam
   SPAMD->autoflush(1);
   
   $transaction->body_resetpos;
-  my $username = $self->{_args}->{spamd_user} || getpwuid($>);
+  my $username = getpwuid($>);
 
   print SPAMD "SYMBOLS SPAMC/1.3" . CRLF;
   print SPAMD "User: $username" . CRLF;
@@ -168,18 +163,26 @@ sub hook_data_post { # check_spam
   $self->log(LOGDEBUG, "check_spam: finished sending to spamd");
   my $line0 = <SPAMD>; # get the first protocol lines out
   if ($line0) {
-    $line0 =~ s/\r?\n$//;
     $self->log(LOGDEBUG, "check_spam: spamd: $line0");
 
-    $self->_cleanup_spam_header($transaction, 'X-Spam-Check-By');
+    if ( $leave_old_headers eq 'rename' )
+    {
+      foreach my $header ( $transaction->header->get('X-Spam-Check-By') )
+      {
+        $transaction->header->add('X-Old-Spam-Check-By', $header);
+      }
+    }
+    
+    if ( $leave_old_headers eq 'drop' || $leave_old_headers eq 'rename' )
+    {
+      $transaction->header->delete('X-Spam-Check-By');
+    }
 
     $transaction->header->add("X-Spam-Check-By", $self->qp->config('me'), 0);
- }    
-
+  }
 
   my ($flag, $hits, $required);
   while (<SPAMD>) {
-    s/\r?\n$//;
     $self->log(LOGDEBUG, "check_spam: spamd: $_");
     #warn "GOT FROM SPAMD1: $_";
     last unless m/\S/;
@@ -188,26 +191,34 @@ sub hook_data_post { # check_spam
     }
 
   }
-  my $tests = <SPAMD>|| '';
-  close SPAMD;
+  my $tests = <SPAMD>;
   $tests =~ s/\015//;  # hack for outlook
   $flag = $flag eq 'True' ? 'Yes' : 'No';
   $self->log(LOGDEBUG, "check_spam: finished reading from spamd");
 
-  $self->_cleanup_spam_header($transaction, 'X-Spam-Flag');
-  $self->_cleanup_spam_header($transaction, 'X-Spam-Status');
-  $self->_cleanup_spam_header($transaction, 'X-Spam-Level');
+  if ( $leave_old_headers eq 'rename' )
+  {
+    foreach my $header ( $transaction->header->get('X-Spam-Flag') )
+    {
+      $transaction->header->add('X-Old-Spam-Flag', $header);
+    }
+
+    foreach my $header ( $transaction->header->get('X-Spam-Status') )
+    {
+      $transaction->header->add('X-Old-Spam-Status', $header);
+    }
+  }
+    
+  if ( $leave_old_headers eq 'drop' || $leave_old_headers eq 'rename' )
+  {
+    $transaction->header->delete('X-Spam-Flag');
+    $transaction->header->delete('X-Spam-Status');
+  }
 
   $transaction->header->add('X-Spam-Flag', 'YES', 0) if ($flag eq 'Yes');
   $transaction->header->add('X-Spam-Status',
 			    "$flag, hits=$hits required=$required\n" .
 			    "\ttests=$tests", 0);
-
-  my $length = int($hits);
-  $length = 1 if $length < 1;
-  $length = 50 if $length > 50;
-  $transaction->header->add('X-Spam-Level', '*' x $length, 0);
-
   $self->log(LOGNOTICE, "check_spam: $flag, hits=$hits, required=$required, " .
 			     "tests=$tests");
 
@@ -247,25 +258,4 @@ sub get_spam_score {
   my $status  = $transaction->header->get('X-Spam-Status') or return; 
   my ($score) = ($status =~ m/hits=(-?\d+\.\d+)/)[0];
   return $score;
-
-
-sub _cleanup_spam_header {
-  my ($self, $transaction, $header_name) = @_;
-
-  my $action = lc($self->{_args}->{leave_old_headers}) || 'rename';
-
-  return unless $action eq 'drop' or $action eq 'rename';
-
-  my $old_header_name = $header_name;
-  $old_header_name = ($old_header_name =~ s/^X-//) ? "X-Old-$old_header_name" : "Old-$old_header_name";
-
-  for my $header ( $transaction->header->get($header_name) ) {
-      $transaction->header->add($old_header_name, $header) if $action eq 'rename';
-      $transaction->header->delete($header_name);
-  }
-  
-        
-}
-
-
 }

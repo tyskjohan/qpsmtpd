@@ -1,0 +1,51 @@
+=head1 NAME
+
+domainkeys_sign: attach a DomainKeys signature to incoming mail before it is queued.
+There must be a way to signal which e-mails to sign.
+
+=cut
+
+require Mail::DomainKeys::Message;
+require Mail::DomainKeys::Key::Private;
+
+
+sub hook_data_post {
+	my $self = shift;
+	my $trns = shift;
+	
+	unless ($self->connection->notes('authuser')) {
+		return DECLINED;	
+	}
+	
+	my @body;
+
+	$trns->body_resetpos;
+
+	$trns->body_getline; # \r\n seperator is NOT part of the body
+
+	while (my $line = $trns->body_getline) {
+		push @body, $line;
+	}
+
+    my $mail = load Mail::DomainKeys::Message(
+				HeadString => $trns->header->as_string,
+				BodyReference => \@body)	
+		|| warn("$$ unable to load message\n")
+		&& return DECLINED;
+
+	# no sender domain means no verification 
+	$mail->	senderdomain
+		|| return DECLINED;
+
+
+# load the private key, or die trying
+my $priv = load Mail::DomainKeys::Key::Private(File => "config/domainkeys/".$mail->senderdomain.".private")
+	|| warn "unable to load key for domain $mail->senderdomain";
+
+# sign the message using the "simple" canonifier and selector "test"
+$mail->sign(Method => "simple", Selector => "test", Private => $priv);
+
+my $signature = $mail->signature->as_string;
+	$trns->header->add('DomainKey-Signature', $signature, 0);
+	
+}

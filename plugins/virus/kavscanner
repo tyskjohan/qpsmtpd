@@ -1,6 +1,6 @@
 #!/usr/bin/perl -w
 # Kasperski-AV plugin.
-
+ 
 =head1 NAME
 
 kavscanner - plugin for qpsmtpd which calls the Kasperski anti virus scanner
@@ -160,7 +160,7 @@ sub hook_data_post {
       # } elsif ($self->{_bcc_virusadmin}) {
       if ($self->{_bcc_virusadmin}) {
         foreach ( @{ Mail::Address->parse($self->{_bcc_virusadmin}) } ) {
-          $transaction->add_recipient($_);
+          $transaction->add_recipient($_->address);
         }
       }
     } else {

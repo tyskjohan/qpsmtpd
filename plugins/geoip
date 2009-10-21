@@ -1,0 +1,20 @@
+use Geo::IP;
+my $geoip = Geo::IP->new(GEOIP_STANDARD); 
+
+sub hook_connect {
+	my ($self) = @_;
+	my $country = $geoip->country_code_by_addr
+		($self->qp->connection->remote_ip); 
+	$self->qp->connection->notes('geoip_country', $country); 
+	$self->log(LOGNOTICE, "GeoIP Country: $country"); 
+	if ( $self->qp->config("badcountries") ) {
+		my @badcountries = $self->qp->config("badcountries");
+
+		for (@badcountries) {
+			my ($pattern, $response) = split /\s+/, $_, 2;
+			return (DENY, $response) if ($country eq $pattern);
+		} 
+	}
+
+	return (DECLINED);
+}

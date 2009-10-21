@@ -1,0 +1,70 @@
+# $Id$
+
+=head1 NAME
+
+spamtrap - handle spamtrap addresses
+
+=head1 DESCRIPTION
+
+xxx
+
+=head1 CONFIGURATION
+
+xxx
+
+=head1 AUTHOR
+
+Written by Johan Almqvist
+
+=cut
+
+use Mail::Address;
+
+sub register {
+  my ($self, $qp, @args) = @_;
+
+  if (@args > 0) {
+    $self->{_spamtrap} = $args[0];
+    if (@args > 1) {
+      $self->log(LOGWARN, "WARNING: Ignoring additional arguments.");
+    }
+    $self->register_hook("rcpt", "rcpt_handler");
+    $self->register_hook("data_post", "data_handler");
+  }
+  else {
+    $self->log(LOGWARN, "WARNING: No spamtrap address provided");  
+  }
+}
+
+sub rcpt_handler {
+	my ($self, $transaction, $rcpt) = @_;
+
+	my $addr = lc $rcpt->address or return DECLINED;
+	my $host = lc $rcpt->host or return DECLINED;
+	my $user = lc $rcpt->user or return DECLINED;
+
+	for my $h ($self->qp->config('spamtraps')) {
+		next unless $h;
+		$h = lc $h;
+
+		if ($addr eq $h or $host eq $h) {
+			$transaction->notes('whitelist', 1);
+			$transaction->notes('denysoft_greylist', 0);
+			$transaction->notes('spamtrap', 1);
+			$self->log(2,"Recipient $addr is a spamtrap");
+			return (OK, 'User is a spam trap. May you burn in hell.');
+		}
+	}
+	DECLINED;
+}
+
+sub data_handler {
+	my ($self, $transaction) = @_;
+
+	my @spamtrap = Mail::Address->parse($self->{_spamtrap});
+	if ($transaction->notes('spamtrap')) {
+		$transaction->recipients(@spamtrap);
+		return OK;
+	}
+	return DECLINED;
+}

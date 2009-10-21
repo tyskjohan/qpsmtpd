@@ -1,7 +1,7 @@
 # -*- perl -*-
 =head1 NAME
 
-check_badmailfrom - checks the badmailfrom config, with per-line reasons
+check_badmailfrom - checks the standard badmailfrom config
 
 =head1 DESCRIPTION
 
@@ -13,9 +13,6 @@ recipient address for a message if the envelope sender address is
 listed in badmailfrom.  A line in badmailfrom may be of the form
 @host, meaning every address at host."
 
-You may optionally include a message after the sender address (leave a space),
-which is used when rejecting the sender.
-
 =head1 NOTES
 
 According to the SMTP protocol, we can't reject until after the RCPT
@@ -24,7 +21,7 @@ stage, so store it until later.
 =cut
 
 sub hook_mail {
-  my ($self, $transaction, $sender, %param) = @_;
+  my ($self, $transaction, $sender) = @_;
 
   my @badmailfrom = $self->qp->config("badmailfrom")
     or return (DECLINED);
@@ -36,25 +33,22 @@ sub hook_mail {
   my $from = lc($sender->user) . '@' . $host;
 
   for my $bad (@badmailfrom) {
-    my $reason = $bad;
-    $reason =~ s/^\s*(\S+)[\t\s]+//;
-    $reason = "sorry, your envelope sender is in my badmailfrom list" unless $reason;
     $bad =~ s/^\s*(\S+).*/$1/;
     next unless $bad;
     $bad = lc $bad;
     $self->log(LOGWARN, "Bad badmailfrom config: No \@ sign in $bad") and next unless $bad =~ m/\@/;
-    $transaction->notes('badmailfrom', $reason)
+    $transaction->notes('badmailfrom', "sorry, your envelope sender is in my badmailfrom list")
       if ($bad eq $from) || (substr($bad,0,1) eq '@' && $bad eq "\@$host");
   }
   return (DECLINED);
 }
 
 sub hook_rcpt {
-  my ($self, $transaction, $rcpt, %param) = @_;
+  my ($self, $transaction, $rcpt) = @_;
   my $note = $transaction->notes('badmailfrom');
   if ($note) {
     $self->log(LOGINFO, $note);
-    return (DENY, $note);
+    return (DENY_DISCONNECT, $note);
   }
   return (DECLINED);
 }

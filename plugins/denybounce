@@ -1,0 +1,31 @@
+sub hook_mail {
+  my ($self, $transaction, $sender) = @_;
+
+  return (DECLINED) unless ($sender->format eq "<>");
+
+  $self->log(LOGDEBUG, "sender is <>");
+  $transaction->notes('bounce',1);
+
+  return (DECLINED);
+}
+
+sub hook_rcpt {
+  my ($self, $transaction, $rcpt) = @_;
+  my $note = $transaction->notes('bounce');
+  return DECLINED unless $note;
+  
+  my @acceptbounce = $self->qp->config("acceptbounce");
+  return DECLINED unless (@acceptbounce);
+
+  my $user = lc($rcpt->user);
+  my $addr = $user . '@' . lc($rcpt->host);
+
+  foreach my $to (@acceptbounce) {
+	chomp $to;
+  	return DECLINED if ($user eq $to);
+  	return DECLINED if ($addr eq $to);
+  }
+  $self->log(LOGDEBUG, "not accepting bounces for $addr");
+  return (DENY, "sorry, $user never sends mail ".
+                "and therefore does not accept bounces");
+}

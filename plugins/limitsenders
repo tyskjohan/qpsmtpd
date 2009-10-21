@@ -1,0 +1,34 @@
+sub hook_mail {
+	my ($self,$transaction, $sender) = @_;
+
+	my $client_ip = lc $self->qp->connection->remote_ip;
+	
+	return (DECLINED) if ($sender->format eq "<>");
+	
+	if ($client_ip eq '213.115.211.24' &&  !(($sender->host eq 'sfs.se')||($sender->host eq 'hsv.se')))
+	{
+		return (DENY, "Only senders \@sfs.se allowed from 213.115.211.24")
+	}
+
+	if ($client_ip eq '194.47.249.19' && !($sender->host eq 'luna.lu.se'))
+	{
+		return (DENY, "Only senders \@luna.lu.se allowed from 194.47.249.19")
+	}
+        if ($client_ip eq '194.47.249.29' && !($sender->host eq 'luna.lu.se'))
+        {
+                return (DENY, "Only senders \@luna.lu.se allowed from 194.47.249.29")
+        } 	
+#	if ($client_ip eq '195.47.215.24' && !(($sender->host eq 'esib.org')||($sender->host eq 'googlemail.com')))
+#	{
+#		return (DENY, "Only senders \@esib.org allowed from 195.47.215.24")
+#	}
+#	if ($client_ip eq '193.221.125.47' && !(($sender->host eq 'esib.org')||($sender->host eq 'googlemail.com')))
+#        {
+#                return (DENY, "Only senders \@esib.org allowed from 193.221.125.47")
+#        }
+#	if ($client_ip eq '85.12.30.142' && !($sender->host eq 'esib.org'))
+#        {
+#                return (DENY, "Only senders \@esib.org allowed from 193.221.125.47")
+#        } 
+	return DECLINED;
+}

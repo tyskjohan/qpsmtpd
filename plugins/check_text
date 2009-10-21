@@ -1,0 +1,178 @@
+#!/usr/bin/perl
+=head1 NAME
+
+check_text - check whether a message contains some text
+
+=head1 DESCRIPTION
+
+This plugin checks whether a message contains some text and rejects it
+if it doesn't and the recipient has indicated that they don't want mails
+without text.
+
+Currently "text" is defined as text/plain, non-markup inside
+text/html, or encrypted message parts. For multipart/alternative, the
+plugin first checks for a text/plain, then a text/html part and
+considers only the first part it finds (i.e. a multipart/alternative
+with an empty text/plain is considered empty, even if there is a
+non-empty HTML part).
+
+This plugin rejects mails only for recipients which have 
+$transaction ->notes('recipient_options') ->{$recipient->address}
+->{check_text} set to a true value. To do this even when this is true
+for only some of the recipients, the cf_wrapper plugin is used. The
+recipient_options note is typically set by the aliases_check plugin. 
+So this plugin needs to be after aliases_check, but before cf_wrapper in
+$confdir/plugins.
+
+=head1 NOTES
+
+This plugin makes use of the following transaction notes:
+
+=over
+
+=item recipient_options
+
+Contains per-recipient options (see above and the aliases_* plugins for
+details).
+
+=item check_text
+
+Internally used to pass information from the rcpt to the data_post hook.
+
+=item cf_wrapper_results
+
+Used to pass return codes and messages to the cf_wrapper plugins.
+
+=back
+
+=cut
+
+use warnings;
+use strict;
+use Data::Dumper;
+use MIME::Parser;
+
+sub hook_rcpt {
+    my ($self, $transaction, $recipient) = @_;
+    my $ro; 
+    my $list;
+    return DECLINED 
+        unless ($ro = $transaction->notes('recipient_options') and
+                $list = $ro->{check_text});
+    $self->log(LOGINFO, $recipient->address . " enabled check_text");
+    my $n = $self->transaction->notes('check_text');
+    $n->{$recipient->address} = $list;
+    $self->transaction->notes('check_text', $n);
+    return DECLINED;
+}
+
+
+sub hook_data_post {
+    my ($self, $transaction) = @_;
+
+    my $results = $transaction->notes('cf_wrapper_results');
+    my $text;
+    for ($transaction->recipients()) {
+	my $r = $_->address;
+	my $rc = defined $results->{$r}
+		  ? (ref $results->{$r} eq "ARRAY"
+		     ? $results->{$r}[0] 
+		     : $results->{$r}
+		    )
+		  : DECLINED;
+	if ($rc == DECLINED) {
+	    my $ml;
+	    my $list;
+	    my $msg = "no objection, your honor!";
+	    my $ct = $transaction->notes('check_text');
+	    $self->log(LOGINFO, "ct = $ct");
+	    $self->log(LOGINFO, "ct->{$r} = $ct->{$r}");
+
+	    if ($ct && $ct->{$r}) {
+		$self->log(LOGINFO, "doing check_text for $r");
+		unless (defined $text) {
+		    # reconstruct message
+		    my $rawmsg = $transaction->header->as_string();
+		    $transaction->body_resetpos;
+		    while (my $line = $transaction->body_getline) {
+			$rawmsg .= $line;
+		    }
+		    my $parser = new MIME::Parser;
+		    $parser->output_to_core(1);
+		    my $entity = $parser->parse_data($rawmsg);
+		    $text = extract_text($entity);
+		}
+
+		$self->log(LOGINFO, "text length:", length($text));
+		if (length($text) == 0) {
+		    $self->log(LOGINFO, "$r doesn't want mails without text");
+		    ($rc, $msg) = (DENY, "$r doesn't want mails without text");
+		}
+	    }
+	    $self->log(LOGINFO, "setting result for $r to $rc");
+	    $results->{$r} = [$rc, $msg];
+	    $transaction->notes('cf_wrapper_results', $results);
+	}
+    }
+    return DECLINED;
+
+}
+
+sub extract_text {
+    my ($entity) = @_;
+
+    if ($entity->parts) {
+        if ($entity->effective_type eq 'multipart/alternative') {
+            print STDERR "Found  multipart/alternative: scanning for text parts\n";
+            my @parts = $entity->parts;
+            my @p;
+            if (@p = grep { $_->effective_type eq 'text/plain'} @parts) {
+                print STDERR "Fount text/plain part in multipart/alternative\n";
+                return extract_text($p[0]);
+            } elsif  (@p = grep { $_->effective_type eq 'text/html'} @parts) {
+                print STDERR "Fount text/html part in multipart/alternative (ignoring)\n";
+                return extract_text($p[0]);
+            }
+
+            
+        } elsif ($entity->effective_type eq 'multipart/encrypted') {
+            return "encrypted message\n";
+        } else {
+            print STDERR "Found ",  $entity->effective_type, ": scanning for text parts\n";
+            my $text = "";
+            for ($entity->parts) {
+                $text .= extract_text($_);
+            }
+            return $text;
+        }
+    } else {
+        if ($entity->effective_type eq 'text/plain') {
+            print STDERR "Found text/plain part\n";
+            return $entity->bodyhandle->as_string;
+        }
+        if ($entity->effective_type eq 'text/html') {
+            my $document = $entity->bodyhandle->as_string;
+            my $p = HTML::TokeParser->new( \$document );
+            my $text = "";
+            while (my $token = $p->get_token) {
+                if ($token->[0] eq 'T') {
+                    $text .= $token->[1];
+                }
+            }
+            return $text;
+        }
+    }
+}
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (c) 2006 Peter J. Holzer
+
+This plugin is licensed under the same terms as the qpsmtpd package
+itself.
+Please see the LICENSE file included with qpsmtpd for details.
+
+=cut
+
+#vim: tw=0
+

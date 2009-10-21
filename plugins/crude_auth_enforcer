@@ -1,0 +1,8 @@
+sub hook_data {
+	my ($self, $transaction) = @_;
+	unless (self->connection->notes('authuser')) {
+		return (DENY_DISCONNECT,
+			'This service is for authorised users only');
+	}
+	return DECLINED;
+}
