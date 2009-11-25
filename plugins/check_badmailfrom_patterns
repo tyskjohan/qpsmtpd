@@ -1,3 +1,4 @@
+
 =pod
 
 =head1 SYNOPSIS
@@ -25,32 +26,32 @@ terms as qpsmtpd itself.
 =cut
 
 sub hook_mail {
-    my ( $self, $transaction, $sender, %param ) = @_;
+    my ($self, $transaction, $sender, %param) = @_;
 
     my @badmailfrom = $self->qp->config("badmailfrom_patterns")
       or return (DECLINED);
 
-    return (DECLINED) if ( $sender->format eq "<>" );
+    return (DECLINED) if ($sender->format eq "<>");
 
     my $host = lc $sender->host;
-    my $from = lc( $sender->user ) . '@' . $host;
+    my $from = lc($sender->user) . '@' . $host;
 
     for (@badmailfrom) {
-        my ( $pattern, $response ) = split /\s+/, $_, 2;
+        my ($pattern, $response) = split /\s+/, $_, 2;
         next unless $from =~ /$pattern/;
         $response = "Your envelope sender is in my badmailfrom_patterns list"
           unless $response;
-        $transaction->notes( 'badmailfrom_patterns', $response );
+        $transaction->notes('badmailfrom_patterns', $response);
     }
     return (DECLINED);
 }
 
 sub hook_rcpt {
-    my ( $self, $transaction, $rcpt, %param ) = @_;
+    my ($self, $transaction, $rcpt, %param) = @_;
     my $note = $transaction->notes('badmailfrom_patterns');
     if ($note) {
-        $self->log( LOGINFO, $note );
-        return ( DENY, $note );
+        $self->log(LOGINFO, $note);
+        return (DENY, $note);
     }
     return (DECLINED);
 }
