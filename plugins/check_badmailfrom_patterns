@@ -2,17 +2,18 @@
 
 =head1 SYNOPSIS
 
-This plugin checks the badmailto_patterns config. This allows
-special patterns to be denied (e.g. percent hack, bangs,
+This plugin checks the badmailfrom_patterns config. This allows
+special patterns to be denied (e.g. FQDN-VERP, percent hack, bangs,
 double ats).
 
 =head1 CONFIG
 
-config/badmailto_patterns
+config/badmailfrom_patterns
 
 Patterns are stored in the format pattern\sresponse, where pattern
-is a Perl pattern expression. Don't forget to anchor the pattern if
-you want to restrict it from matching anywhere in the string.
+is a Perl pattern expression. Don't forget to anchor the pattern
+(front ^ and back $) if you want to restrict it from matching
+anywhere in the string.
 
 =head1 AUTHOR
 
@@ -24,31 +25,32 @@ terms as qpsmtpd itself.
 =cut
 
 sub hook_mail {
-  my ($self, $transaction, $sender, %param) = @_;
+    my ( $self, $transaction, $sender, %param ) = @_;
 
-  my @badmailfrom = $self->qp->config("badmailfrom_patterns")
-    or return (DECLINED);
+    my @badmailfrom = $self->qp->config("badmailfrom_patterns")
+      or return (DECLINED);
 
-  return (DECLINED) if ($sender->format eq "<>");
+    return (DECLINED) if ( $sender->format eq "<>" );
 
-  my $host = lc $sender->host;
-  my $from = lc($sender->user) . '@' . $host;
+    my $host = lc $sender->host;
+    my $from = lc( $sender->user ) . '@' . $host;
 
-  for (@badmailfrom) {
-    my ($pattern, $response) = split /\s+/, $_, 2;
-    $response = "Your envelope sender is in my badmailfrom list" unless $response;
-    $transaction->notes('badmailfrom_patterns', $response) if ($from =~ /$pattern/);
-  }
-  return (DECLINED);
+    for (@badmailfrom) {
+        my ( $pattern, $response ) = split /\s+/, $_, 2;
+        next unless $from =~ /$pattern/;
+        $response = "Your envelope sender is in my badmailfrom_patterns list"
+          unless $response;
+        $transaction->notes( 'badmailfrom_patterns', $response );
+    }
+    return (DECLINED);
 }
 
-sub hook_rcpt
-{
-  my ($self, $transaction, $rcpt, %param) = @_;
-  my $note = $transaction->notes('badmailfrom_patterns');
-  if ($note) {
-    $self->log(LOGINFO, $note);
-    return (DENY, $note);
-  }
-  return (DECLINED);
+sub hook_rcpt {
+    my ( $self, $transaction, $rcpt, %param ) = @_;
+    my $note = $transaction->notes('badmailfrom_patterns');
+    if ($note) {
+        $self->log( LOGINFO, $note );
+        return ( DENY, $note );
+    }
+    return (DECLINED);
 }
