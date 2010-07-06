@@ -62,10 +62,12 @@ plugins/async/queue/smtp-forward
 plugins/async/require_resolvable_fromhost
 plugins/async/rhsbl
 plugins/async/uribl
+plugins/auth/auth_checkpassword
 plugins/auth/auth_cvm_unix_local
 plugins/auth/auth_flat_file
 plugins/auth/auth_ldap_bind
 plugins/auth/auth_vpopmail_sql
+plugins/auth/auth_vpopmaild
 plugins/auth/authdeny
 plugins/check_badmailfrom
 plugins/check_badmailfromto
